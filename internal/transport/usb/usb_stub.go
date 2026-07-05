@@ -1,14 +1,14 @@
 //go:build !usb
 
-package usbserial
+package usb
 
 import (
 	"io"
 	"time"
 )
 
-// Open is unavailable unless the binary is built with `-tags usb`.
-func Open(_ Options) (io.ReadWriteCloser, string, error) {
+// openLink is unavailable unless the binary is built with `-tags usb`.
+func openLink(_ Options) (io.ReadWriteCloser, string, error) {
 	return nil, "", ErrNotSupported
 }
 

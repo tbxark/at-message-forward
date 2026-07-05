@@ -1,7 +1,9 @@
-package serialport
+package serial
 
 import (
+	"context"
 	"fmt"
+	"io"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -11,7 +13,7 @@ import (
 	"strings"
 	"time"
 
-	"go.bug.st/serial"
+	bugst "go.bug.st/serial"
 )
 
 type Candidate struct {
@@ -31,7 +33,44 @@ const (
 var (
 	candidateProvider = Candidates
 	probeSerialPort   = ProbeAT
+	// Seams for the Transport open path, overridable in tests.
+	autoDetectPort = AutoDetectWithBaud
+	openPort       = Open
 )
+
+// Transport opens a modem's AT stream over a serial port. When Port is empty,
+// each Open re-runs auto-detection so a re-enumerated USB device is found on
+// reconnect. It implements the parent transport.Transport interface.
+type Transport struct {
+	Port string
+	Baud int
+}
+
+// New returns a serial Transport for the given port (empty = auto-detect) and
+// baud rate.
+func New(port string, baud int) *Transport {
+	return &Transport{Port: port, Baud: baud}
+}
+
+// Open resolves the port (auto-detecting when unset), opens it, and returns the
+// AT stream plus the resolved port name.
+func (t *Transport) Open(_ context.Context) (io.ReadWriteCloser, string, error) {
+	portName := t.Port
+	if portName == "" {
+		detected, err := autoDetectPort(t.Baud)
+		if err != nil {
+			return nil, "", fmt.Errorf("serial port not found: %w", err)
+		}
+		portName = detected
+	}
+
+	slog.Info("using serial port", "port", portName, "baud", t.Baud)
+	port, err := openPort(portName, t.Baud)
+	if err != nil {
+		return nil, "", fmt.Errorf("open serial failed: %w", err)
+	}
+	return port, portName, nil
+}
 
 func AutoDetect() (string, error) {
 	return AutoDetectWithBaud(defaultProbeBaud)
@@ -50,15 +89,15 @@ func AutoDetectWithBaud(baud int) (string, error) {
 	return selected.Port, nil
 }
 
-func Open(portName string, baud int) (serial.Port, error) {
+func Open(portName string, baud int) (bugst.Port, error) {
 	if baud <= 0 {
 		return nil, fmt.Errorf("invalid baud %d", baud)
 	}
-	return serial.Open(portName, &serial.Mode{
+	return bugst.Open(portName, &bugst.Mode{
 		BaudRate: baud,
 		DataBits: 8,
-		Parity:   serial.NoParity,
-		StopBits: serial.OneStopBit,
+		Parity:   bugst.NoParity,
+		StopBits: bugst.OneStopBit,
 	})
 }
 
@@ -105,7 +144,7 @@ func Candidates() []Candidate {
 }
 
 func serialLibraryCandidates() []Candidate {
-	ports, err := serial.GetPortsList()
+	ports, err := bugst.GetPortsList()
 	if err != nil {
 		slog.Error("list serial ports failed", "err", err)
 		return nil
@@ -209,7 +248,7 @@ func ProbeAT(portName string, baud int, timeout time.Duration) (bool, error) {
 	return probeOpenedATPort(port, timeout)
 }
 
-func probeOpenedATPort(port serial.Port, timeout time.Duration) (bool, error) {
+func probeOpenedATPort(port bugst.Port, timeout time.Duration) (bool, error) {
 	if timeout <= 0 {
 		timeout = DefaultProbeTimeout
 	}

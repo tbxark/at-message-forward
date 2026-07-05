@@ -1,4 +1,4 @@
-// Package usbserial provides an io.ReadWriteCloser transport that talks to a
+// Package usb provides an io.ReadWriteCloser transport that talks to a
 // cellular modem's AT command interface directly over USB bulk endpoints.
 //
 // This is needed on hosts (notably macOS) where the modem's AT port is exposed
@@ -6,10 +6,12 @@
 // binds, so no /dev/tty*/dev/cu.* node exists. Linux usually creates
 // /dev/ttyUSB* for such modems via the `option` driver, in which case the plain
 // serial transport is simpler and this package is unnecessary.
-package usbserial
+package usb
 
 import (
+	"context"
 	"errors"
+	"io"
 	"time"
 )
 
@@ -42,3 +44,21 @@ const DefaultProbeTimeout = 1500 * time.Millisecond
 
 // ErrNotSupported is returned by the stub build (without `-tags usb`).
 var ErrNotSupported = errors.New("usb transport not built in; rebuild with `-tags usb` and CGO_ENABLED=1 (requires libusb)")
+
+// Transport opens a modem's AT stream over USB bulk endpoints. It implements
+// the parent transport.Transport interface. The real open path is build-tagged
+// (`usb` + CGO/libusb); the stub build returns ErrNotSupported.
+type Transport struct {
+	Options Options
+}
+
+// New returns a USB Transport configured by opts.
+func New(opts Options) *Transport {
+	return &Transport{Options: opts}
+}
+
+// Open discovers the device, selects its AT interface, and returns the AT
+// stream plus a human-readable description of what was opened.
+func (t *Transport) Open(_ context.Context) (io.ReadWriteCloser, string, error) {
+	return openLink(t.Options)
+}

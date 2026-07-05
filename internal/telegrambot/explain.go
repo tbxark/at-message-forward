@@ -40,6 +40,12 @@ func explainCommandResult(result commandResult) []string {
 		return []string{"SMS mode has been switched to text mode."}
 	case "+CNMI=2,2,0,0,0":
 		return []string{"New SMS push has been configured to report directly over the serial port."}
+	case "+CNMI=2,1,0,0,0":
+		return []string{
+			"New SMS will be stored on the SIM/module and reported as an index notification (+CMTI:).",
+			"Use \"Unread SMS\" or \"All SMS\" to read them.",
+			"Note: in this mode new SMS are not pushed directly, so auto-forwarding is paused until you re-enable SMS push.",
+		}
 	case "+CPMS?":
 		return explainCPMS(result.Lines)
 	case "+CMGL=\"REC UNREAD\"", "+CMGL=\"ALL\"":

@@ -6,17 +6,14 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
-	"strconv"
-	"strings"
 	"sync"
 	"time"
 
 	"github.com/tbxark/at-message-forward/internal/config"
 	"github.com/tbxark/at-message-forward/internal/modem"
-	"github.com/tbxark/at-message-forward/internal/serialport"
 	"github.com/tbxark/at-message-forward/internal/sms"
 	"github.com/tbxark/at-message-forward/internal/telegrambot"
-	"github.com/tbxark/at-message-forward/internal/usbserial"
+	"github.com/tbxark/at-message-forward/internal/transport"
 	modemat "github.com/warthog618/modem/at"
 )
 
@@ -35,9 +32,7 @@ const (
 var (
 	errSerialNotConnected  = errors.New("serial not connected")
 	errSerialSessionClosed = errors.New("serial session closed")
-	autoDetectSerialPort   = serialport.AutoDetectWithBaud
-	openSerialPort         = serialport.Open
-	openUSBTransport       = usbserial.Open
+	newTransport           = transport.New
 )
 
 type telegramClient interface {
@@ -164,7 +159,7 @@ func (s *telegramSender) send(ctx context.Context, item telegramSendItem) {
 }
 
 type reconnectLoopOptions struct {
-	runSession     func(context.Context, config.Config, *reconnectableExecutor, *telegramSender) error
+	runSession     func(context.Context) error
 	wait           func(context.Context, time.Duration) error
 	initialBackoff time.Duration
 	maxBackoff     time.Duration
@@ -205,19 +200,25 @@ func Run(ctx context.Context, cfg config.Config) error {
 	defer cancelWatchdog()
 	go runSerialWatchdog(watchdogCtx, executor, sender)
 
-	return runReconnectLoop(ctx, cfg, executor, sender)
+	tr, err := newTransport(cfg)
+	if err != nil {
+		return err
+	}
+	return runReconnectLoop(ctx, cfg, tr, executor, sender)
 }
 
-func runReconnectLoop(ctx context.Context, cfg config.Config, executor *reconnectableExecutor, sender *telegramSender) error {
-	return runReconnectLoopWithOptions(ctx, cfg, executor, sender, reconnectLoopOptions{
-		runSession:     runModemSession,
+func runReconnectLoop(ctx context.Context, cfg config.Config, tr transport.Transport, executor *reconnectableExecutor, sender *telegramSender) error {
+	return runReconnectLoopWithOptions(ctx, reconnectLoopOptions{
+		runSession: func(ctx context.Context) error {
+			return runModemSession(ctx, cfg, tr, executor, sender)
+		},
 		wait:           waitBackoff,
 		initialBackoff: reconnectInitialBackoff,
 		maxBackoff:     reconnectMaxBackoff,
 	})
 }
 
-func runReconnectLoopWithOptions(ctx context.Context, cfg config.Config, executor *reconnectableExecutor, sender *telegramSender, opts reconnectLoopOptions) error {
+func runReconnectLoopWithOptions(ctx context.Context, opts reconnectLoopOptions) error {
 	initialBackoff := opts.initialBackoff
 	if initialBackoff <= 0 {
 		initialBackoff = reconnectInitialBackoff
@@ -228,9 +229,6 @@ func runReconnectLoopWithOptions(ctx context.Context, cfg config.Config, executo
 		maxBackoff = reconnectMaxBackoff
 	}
 	runSession := opts.runSession
-	if runSession == nil {
-		runSession = runModemSession
-	}
 	wait := opts.wait
 	if wait == nil {
 		wait = waitBackoff
@@ -241,7 +239,7 @@ func runReconnectLoopWithOptions(ctx context.Context, cfg config.Config, executo
 			slog.Info("stopped")
 			return nil
 		}
-		err := runSession(ctx, cfg, executor, sender)
+		err := runSession(ctx)
 		if ctx.Err() != nil {
 			slog.Info("stopped")
 			return nil
@@ -266,65 +264,14 @@ func runReconnectLoopWithOptions(ctx context.Context, cfg config.Config, executo
 	}
 }
 
-// runModemSession dispatches to the transport selected by cfg.Transport.
-func runModemSession(ctx context.Context, cfg config.Config, executor *reconnectableExecutor, sender *telegramSender) error {
-	if strings.EqualFold(cfg.Transport, config.TransportUSB) {
-		return runUSBSession(ctx, cfg, executor, sender)
-	}
-	return runSerialSession(ctx, cfg, executor, sender)
-}
-
-func runSerialSession(ctx context.Context, cfg config.Config, executor *reconnectableExecutor, sender *telegramSender) error {
-	portName := cfg.Port
-	if portName == "" {
-		port, err := autoDetectSerialPort(cfg.Baud)
-		if err != nil {
-			return fmt.Errorf("serial port not found: %w", err)
-		}
-		portName = port
-	}
-
-	slog.Info("using serial port", "port", portName, "baud", cfg.Baud)
-	port, err := openSerialPort(portName, cfg.Baud)
+// runModemSession opens the transport (re-running discovery each call) and runs
+// one modem session over the returned link.
+func runModemSession(ctx context.Context, cfg config.Config, tr transport.Transport, executor *reconnectableExecutor, sender *telegramSender) error {
+	link, name, err := tr.Open(ctx)
 	if err != nil {
-		return fmt.Errorf("open serial failed: %w", err)
+		return fmt.Errorf("open modem failed: %w", err)
 	}
-	return runOpenedModemSession(ctx, cfg, portName, port, executor, sender)
-}
-
-func runUSBSession(ctx context.Context, cfg config.Config, executor *reconnectableExecutor, sender *telegramSender) error {
-	vid, err := parseHexID(cfg.USBVendor)
-	if err != nil {
-		return fmt.Errorf("usb_vendor: %w", err)
-	}
-	pid, err := parseHexID(cfg.USBProduct)
-	if err != nil {
-		return fmt.Errorf("usb_product: %w", err)
-	}
-
-	link, name, err := openUSBTransport(usbserial.Options{
-		Vendor:    vid,
-		Product:   pid,
-		Interface: cfg.USBInterface,
-	})
-	if err != nil {
-		return fmt.Errorf("open usb modem failed: %w", err)
-	}
-	slog.Info("using usb modem", "link", name)
 	return runOpenedModemSession(ctx, cfg, name, link, executor, sender)
-}
-
-func parseHexID(value string) (uint16, error) {
-	value = strings.TrimSpace(value)
-	if value == "" {
-		return 0, nil
-	}
-	value = strings.TrimPrefix(strings.ToLower(value), "0x")
-	n, err := strconv.ParseUint(value, 16, 16)
-	if err != nil {
-		return 0, fmt.Errorf("invalid hex id %q: %w", value, err)
-	}
-	return uint16(n), nil
 }
 
 func runOpenedModemSession(ctx context.Context, cfg config.Config, portName string, port io.ReadWriteCloser, executor *reconnectableExecutor, sender *telegramSender) error {

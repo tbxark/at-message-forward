@@ -1,6 +1,6 @@
 //go:build usb
 
-package usbserial
+package usb
 
 import (
 	"bytes"
@@ -81,9 +81,9 @@ func (t *transport) Close() error {
 	return nil
 }
 
-// Open finds the modem, selects its AT interface, and returns a transport plus
-// a human-readable description of what was opened.
-func Open(opts Options) (io.ReadWriteCloser, string, error) {
+// openLink finds the modem, selects its AT interface, and returns a transport
+// plus a human-readable description of what was opened.
+func openLink(opts Options) (io.ReadWriteCloser, string, error) {
 	timeout := opts.ProbeTimeout
 	if timeout <= 0 {
 		timeout = DefaultProbeTimeout

@@ -117,7 +117,7 @@ func TestActionResultKeyboard(t *testing.T) {
 }
 
 func TestAllActionsHaveParentMenus(t *testing.T) {
-	for _, id := range []string{"status_summary", "signal", "registration", "operator", "sim", "module", "sms_unread", "sms_all", "sms_storage", "function_mode", "enable_sms_push", "reset"} {
+	for _, id := range []string{"status_summary", "signal", "registration", "operator", "sim", "module", "sms_unread", "sms_all", "sms_storage", "enable_sms_storage", "function_mode", "enable_sms_push", "reset"} {
 		act, ok := actionForID(id)
 		if !ok {
 			t.Fatalf("action %q not found", id)
@@ -323,6 +323,7 @@ func TestExplainCommandResults(t *testing.T) {
 		{name: "operator", result: commandResult{Command: "+COPS?", Lines: []string{"+COPS: 0,0,\"CHINA MOBILE\",7", "OK"}}, want: "LTE/E-UTRAN"},
 		{name: "storage", result: commandResult{Command: "+CPMS?", Lines: []string{"+CPMS: \"SM\",1,50,\"SM\",1,50,\"SM\",1,50", "OK"}}, want: "used 1 / total 50"},
 		{name: "sms list", result: commandResult{Command: "+CMGL=\"ALL\"", Lines: []string{"+CMGL: 1,\"REC READ\",\"+123\",,\"26/06/19,18:00:00+32\"", "hello", "OK"}}, want: "Read 1 SMS message(s)"},
+		{name: "sms storage mode", result: commandResult{Command: "+CNMI=2,1,0,0,0", Lines: []string{"OK"}}, want: "auto-forwarding is paused"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

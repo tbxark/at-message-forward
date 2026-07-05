@@ -8,63 +8,29 @@ import (
 	"time"
 
 	"github.com/tbxark/at-message-forward/internal/config"
-	"github.com/tbxark/at-message-forward/internal/usbserial"
-	serial "go.bug.st/serial"
 )
 
-func TestParseHexID(t *testing.T) {
-	cases := []struct {
-		in      string
-		want    uint16
-		wantErr bool
-	}{
-		{"", 0, false},
-		{"2c7c", 0x2c7c, false},
-		{"0x0125", 0x0125, false},
-		{"FFFF", 0xffff, false},
-		{"  2c7c  ", 0x2c7c, false},
-		{"nothex", 0, true},
-		{"10000", 0, true},
-	}
-	for _, c := range cases {
-		got, err := parseHexID(c.in)
-		if c.wantErr {
-			if err == nil {
-				t.Fatalf("parseHexID(%q) err = nil, want error", c.in)
-			}
-			continue
-		}
-		if err != nil {
-			t.Fatalf("parseHexID(%q) err = %v", c.in, err)
-		}
-		if got != c.want {
-			t.Fatalf("parseHexID(%q) = %#x, want %#x", c.in, got, c.want)
-		}
-	}
+// fakeTransport is a stand-in transport for exercising the session/reconnect
+// paths without real hardware. This is exactly the seam an integration test or
+// a local mock would plug into.
+type fakeTransport struct {
+	opens int
+	link  io.ReadWriteCloser
+	name  string
+	err   error
 }
 
-func TestRunModemSessionRoutesToUSB(t *testing.T) {
-	original := openUSBTransport
-	defer func() { openUSBTransport = original }()
+func (f *fakeTransport) Open(context.Context) (io.ReadWriteCloser, string, error) {
+	f.opens++
+	return f.link, f.name, f.err
+}
 
-	called := false
-	wantErr := errors.New("usb boom")
-	openUSBTransport = func(opts usbserial.Options) (io.ReadWriteCloser, string, error) {
-		called = true
-		if opts.Interface != 5 {
-			t.Fatalf("Interface = %d, want 5", opts.Interface)
-		}
-		if opts.Vendor != 0x2c7c {
-			t.Fatalf("Vendor = %#x, want 0x2c7c", opts.Vendor)
-		}
-		return nil, "", wantErr
-	}
-
-	err := runModemSession(context.Background(),
-		config.Config{Transport: "usb", USBVendor: "2c7c", USBInterface: 5},
-		&reconnectableExecutor{}, nil)
-	if !called {
-		t.Fatal("usb transport was not used for transport=usb")
+func TestRunModemSessionWrapsOpenError(t *testing.T) {
+	wantErr := errors.New("boom")
+	tr := &fakeTransport{err: wantErr}
+	err := runModemSession(context.Background(), config.Config{}, tr, &reconnectableExecutor{}, nil)
+	if tr.opens != 1 {
+		t.Fatalf("opens = %d, want 1", tr.opens)
 	}
 	if !errors.Is(err, wantErr) {
 		t.Fatalf("err = %v, want %v", err, wantErr)
@@ -77,10 +43,10 @@ func TestReconnectLoopRetriesAfterClosedSession(t *testing.T) {
 	runs := 0
 	waits := 0
 	errClosed := errors.New("closed")
-	err := runReconnectLoopWithOptions(ctx, config.Config{}, &reconnectableExecutor{}, nil, reconnectLoopOptions{
+	err := runReconnectLoopWithOptions(ctx, reconnectLoopOptions{
 		initialBackoff: time.Second,
 		maxBackoff:     4 * time.Second,
-		runSession: func(context.Context, config.Config, *reconnectableExecutor, *telegramSender) error {
+		runSession: func(context.Context) error {
 			runs++
 			if runs == 2 {
 				cancel()
@@ -107,10 +73,10 @@ func TestReconnectLoopRespectsContextCancellationDuringWait(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	runs := 0
-	err := runReconnectLoopWithOptions(ctx, config.Config{}, &reconnectableExecutor{}, nil, reconnectLoopOptions{
+	err := runReconnectLoopWithOptions(ctx, reconnectLoopOptions{
 		initialBackoff: time.Second,
 		maxBackoff:     4 * time.Second,
-		runSession: func(context.Context, config.Config, *reconnectableExecutor, *telegramSender) error {
+		runSession: func(context.Context) error {
 			runs++
 			return errSerialSessionClosed
 		},
@@ -144,10 +110,10 @@ func TestReconnectLoopResetsBackoffAfterConnectedSession(t *testing.T) {
 	defer cancel()
 	errs := []error{errors.New("open failed"), errors.New("init failed"), errSerialSessionClosed, errors.New("open failed again")}
 	var waits []time.Duration
-	err := runReconnectLoopWithOptions(ctx, config.Config{}, &reconnectableExecutor{}, nil, reconnectLoopOptions{
+	err := runReconnectLoopWithOptions(ctx, reconnectLoopOptions{
 		initialBackoff: time.Second,
 		maxBackoff:     4 * time.Second,
-		runSession: func(context.Context, config.Config, *reconnectableExecutor, *telegramSender) error {
+		runSession: func(context.Context) error {
 			err := errs[0]
 			errs = errs[1:]
 			if len(errs) == 0 {
@@ -171,44 +137,5 @@ func TestReconnectLoopResetsBackoffAfterConnectedSession(t *testing.T) {
 		if waits[i] != want[i] {
 			t.Fatalf("waits = %v, want %v", waits, want)
 		}
-	}
-}
-
-func TestRunSerialSessionAutoDetectsEachAttempt(t *testing.T) {
-	originalAutoDetect := autoDetectSerialPort
-	originalOpen := openSerialPort
-	autoDetectCalls := 0
-	autoDetectSerialPort = func(int) (string, error) {
-		autoDetectCalls++
-		return "/dev/ttyUSB-test", nil
-	}
-	openSerialPort = func(string, int) (serial.Port, error) {
-		return nil, errors.New("open failed")
-	}
-	defer func() {
-		autoDetectSerialPort = originalAutoDetect
-		openSerialPort = originalOpen
-	}()
-
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	runs := 0
-	err := runReconnectLoopWithOptions(ctx, config.Config{Baud: 115200}, &reconnectableExecutor{}, nil, reconnectLoopOptions{
-		initialBackoff: time.Second,
-		maxBackoff:     time.Second,
-		runSession: func(ctx context.Context, cfg config.Config, executor *reconnectableExecutor, sender *telegramSender) error {
-			runs++
-			if runs == 2 {
-				cancel()
-			}
-			return runSerialSession(ctx, cfg, executor, sender)
-		},
-		wait: func(context.Context, time.Duration) error { return nil },
-	})
-	if err != nil {
-		t.Fatalf("runReconnectLoopWithOptions returned error: %v", err)
-	}
-	if autoDetectCalls != 2 {
-		t.Fatalf("autoDetectCalls = %d, want 2", autoDetectCalls)
 	}
 }

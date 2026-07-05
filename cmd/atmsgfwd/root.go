@@ -14,8 +14,8 @@ import (
 	"github.com/spf13/cobra"
 	"github.com/tbxark/at-message-forward/internal/config"
 	"github.com/tbxark/at-message-forward/internal/forwarder"
-	"github.com/tbxark/at-message-forward/internal/serialport"
-	"github.com/tbxark/at-message-forward/internal/usbserial"
+	"github.com/tbxark/at-message-forward/internal/transport/serial"
+	"github.com/tbxark/at-message-forward/internal/transport/usb"
 )
 
 var BuildVersion = "dev"
@@ -69,7 +69,7 @@ func newPortsCommand() *cobra.Command {
 	cfg := config.Default()
 	baud := cfg.Baud
 	probe := true
-	probeTimeout := serialport.DefaultProbeTimeout
+	probeTimeout := serial.DefaultProbeTimeout
 	cmd := &cobra.Command{
 		Use:   "ports",
 		Short: "List serial port candidates",
@@ -83,9 +83,9 @@ func newPortsCommand() *cobra.Command {
 				if probeTimeout <= 0 {
 					return fmt.Errorf("invalid probe timeout %s", probeTimeout)
 				}
-				serialport.PrintProbedCandidates(baud, probeTimeout)
+				serial.PrintProbedCandidates(baud, probeTimeout)
 			} else {
-				serialport.PrintCandidates()
+				serial.PrintCandidates()
 			}
 			printUSBCandidates(cmd, probeTimeout)
 			return nil
@@ -99,9 +99,9 @@ func newPortsCommand() *cobra.Command {
 
 func printUSBCandidates(cmd *cobra.Command, probeTimeout time.Duration) {
 	out := cmd.OutOrStdout()
-	candidates, err := usbserial.List(probeTimeout)
+	candidates, err := usb.List(probeTimeout)
 	if err != nil {
-		if errors.Is(err, usbserial.ErrNotSupported) {
+		if errors.Is(err, usb.ErrNotSupported) {
 			fmt.Fprintln(out, "usb transport: not built in (rebuild with `-tags usb` and CGO_ENABLED=1 to talk to modems that expose no serial port, e.g. on macOS)")
 			return
 		}

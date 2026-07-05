@@ -62,6 +62,7 @@ func smsMenuMessage() *tgapp.Message {
 			actionButton("Unread SMS", "sms_unread"),
 			actionButton("All SMS", "sms_all"),
 			actionButton("SMS Storage", "sms_storage"),
+			actionButton("Store SMS to SIM", "enable_sms_storage"),
 			menuButton("Back", "main"),
 		),
 	}
