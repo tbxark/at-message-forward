@@ -25,10 +25,7 @@ type Candidate struct {
 	ProbeError     string
 }
 
-const (
-	DefaultProbeTimeout = 1500 * time.Millisecond
-	defaultProbeBaud    = 115200
-)
+const DefaultProbeTimeout = 1500 * time.Millisecond
 
 var (
 	candidateProvider = Candidates
@@ -70,10 +67,6 @@ func (t *Transport) Open(_ context.Context) (io.ReadWriteCloser, string, error) 
 		return nil, "", fmt.Errorf("open serial failed: %w", err)
 	}
 	return port, portName, nil
-}
-
-func AutoDetect() (string, error) {
-	return AutoDetectWithBaud(defaultProbeBaud)
 }
 
 func AutoDetectWithBaud(baud int) (string, error) {

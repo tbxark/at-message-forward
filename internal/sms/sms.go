@@ -60,18 +60,6 @@ func ParseCMTIndication(lines []string) (Event, error) {
 	return event, fmt.Errorf("unsupported +CMT header: %s", header)
 }
 
-func IsCMTPDUHeader(line string) bool {
-	return cmtPDUHeaderRE.MatchString(line)
-}
-
-func CMTPDUHeaderLength(line string) (string, bool) {
-	match := cmtPDUHeaderRE.FindStringSubmatch(line)
-	if len(match) != 2 {
-		return "", false
-	}
-	return match[1], true
-}
-
 func DecodePDU(pdu string, expectedTPDULength int) (Event, error) {
 	var event Event
 	event.At = time.Now()
@@ -123,15 +111,15 @@ func DecodePDU(pdu string, expectedTPDULength int) (Event, error) {
 	mti := firstOctet & 0x03
 	switch mti {
 	case 0x00:
-		return decodeDeliverTPDU(event, firstOctet, pdu[pos:], readByte, readHex)
+		return decodeDeliverTPDU(event, firstOctet, readByte, readHex)
 	case 0x01:
-		return decodeSubmitTPDU(event, firstOctet, pdu[pos:], readByte, readHex)
+		return decodeSubmitTPDU(event, firstOctet, readByte, readHex)
 	default:
 		return event, fmt.Errorf("unsupported tpdu mti=0x%02X", mti)
 	}
 }
 
-func decodeDeliverTPDU(event Event, firstOctet byte, _ string, readByte func() (byte, error), readHex func(int) (string, error)) (Event, error) {
+func decodeDeliverTPDU(event Event, firstOctet byte, readByte func() (byte, error), readHex func(int) (string, error)) (Event, error) {
 	hasUDH := firstOctet&0x40 != 0
 
 	originLen, err := readByte()
@@ -179,7 +167,7 @@ func decodeDeliverTPDU(event Event, firstOctet byte, _ string, readByte func() (
 	return event, nil
 }
 
-func decodeSubmitTPDU(event Event, firstOctet byte, _ string, readByte func() (byte, error), readHex func(int) (string, error)) (Event, error) {
+func decodeSubmitTPDU(event Event, firstOctet byte, readByte func() (byte, error), readHex func(int) (string, error)) (Event, error) {
 	hasUDH := firstOctet&0x40 != 0
 	if _, err := readByte(); err != nil { // MR
 		return event, err

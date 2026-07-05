@@ -42,7 +42,7 @@ func TestDecodePDURejectsUnsupportedMTI(t *testing.T) {
 	}
 }
 
-func TestCMTPDUHeader(t *testing.T) {
+func TestCMTPDUHeaderRegex(t *testing.T) {
 	cases := map[string]string{
 		`+CMT:,23`:       "23",
 		`+CMT: , 23`:     "23",
@@ -51,17 +51,17 @@ func TestCMTPDUHeader(t *testing.T) {
 	}
 	for line, want := range cases {
 		t.Run(line, func(t *testing.T) {
-			got, ok := CMTPDUHeaderLength(line)
-			if !ok {
-				t.Fatalf("expected match")
+			m := cmtPDUHeaderRE.FindStringSubmatch(line)
+			if len(m) != 2 {
+				t.Fatalf("expected match, got %v", m)
 			}
-			if got != want {
-				t.Fatalf("length = %q", got)
+			if m[1] != want {
+				t.Fatalf("length = %q", m[1])
 			}
 		})
 	}
 
-	if IsCMTPDUHeader(`+CMT: "+86138xxxx0000","","26/06/19,16:30:00+32"`) {
+	if cmtPDUHeaderRE.MatchString(`+CMT: "+86138xxxx0000","","26/06/19,16:30:00+32"`) {
 		t.Fatal("text-mode CMT header should not match PDU header")
 	}
 }
