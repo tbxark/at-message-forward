@@ -11,8 +11,8 @@ import (
 	tgapp "github.com/go-sphere/telegram-bot/telegram"
 	telebot "github.com/go-telegram/bot"
 	"github.com/go-telegram/bot/models"
-	"github.com/tbxark/air780e-sms-forwarder/internal/config"
-	"github.com/tbxark/air780e-sms-forwarder/internal/sms"
+	"github.com/tbxark/at-message-forward/internal/config"
+	"github.com/tbxark/at-message-forward/internal/sms"
 )
 
 const (
@@ -89,7 +89,7 @@ func (s *Service) SendSMS(ctx context.Context, event sms.Event) error {
 }
 
 func (s *Service) SendRaw(ctx context.Context, line string) error {
-	return s.pushText(ctx, "Air780E raw: "+line)
+	return s.pushText(ctx, "Modem raw: "+line)
 }
 
 func (s *Service) SendWatchdogAlert(ctx context.Context, reason string) error {

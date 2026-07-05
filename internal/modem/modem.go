@@ -7,7 +7,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/tbxark/air780e-sms-forwarder/internal/sms"
+	"github.com/tbxark/at-message-forward/internal/sms"
 	modemat "github.com/warthog618/modem/at"
 )
 
@@ -43,14 +43,17 @@ func NewAT(port io.ReadWriter, rawLines chan<- string, events chan<- sms.Event) 
 	)
 }
 
-func InitAir780E(modem atCommander, simReadyTimeout time.Duration) error {
+// Init runs the generic 3GPP AT initialization sequence supported by most
+// AT-capable cellular modems (SIMCom, Quectel, EigenComm/Air780E, etc.):
+// echo off, wait for SIM ready, then enable direct SMS push in text mode.
+func Init(modem atCommander, simReadyTimeout time.Duration) error {
 	if simReadyTimeout <= 0 {
 		simReadyTimeout = cpinReadyTimeout
 	}
-	return initAir780E(modem, simReadyTimeout, cpinRetryDelay)
+	return initModem(modem, simReadyTimeout, cpinRetryDelay)
 }
 
-func initAir780E(modem atCommander, cpinTimeout, cpinDelay time.Duration) error {
+func initModem(modem atCommander, cpinTimeout, cpinDelay time.Duration) error {
 	commands := []string{
 		"",
 		"E0",

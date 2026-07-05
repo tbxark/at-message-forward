@@ -1,10 +1,11 @@
-module github.com/tbxark/air780e-sms-forwarder
+module github.com/tbxark/at-message-forward
 
 go 1.26
 
 require (
 	github.com/go-sphere/telegram-bot v0.0.2
 	github.com/go-telegram/bot v1.18.0
+	github.com/google/gousb v1.1.3
 	github.com/spf13/cobra v1.10.2
 	github.com/warthog618/modem v0.4.0
 	go.bug.st/serial v1.7.1

@@ -4,17 +4,20 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
+	"strconv"
+	"strings"
 	"sync"
 	"time"
 
-	"github.com/tbxark/air780e-sms-forwarder/internal/config"
-	"github.com/tbxark/air780e-sms-forwarder/internal/modem"
-	"github.com/tbxark/air780e-sms-forwarder/internal/serialport"
-	"github.com/tbxark/air780e-sms-forwarder/internal/sms"
-	"github.com/tbxark/air780e-sms-forwarder/internal/telegrambot"
+	"github.com/tbxark/at-message-forward/internal/config"
+	"github.com/tbxark/at-message-forward/internal/modem"
+	"github.com/tbxark/at-message-forward/internal/serialport"
+	"github.com/tbxark/at-message-forward/internal/sms"
+	"github.com/tbxark/at-message-forward/internal/telegrambot"
+	"github.com/tbxark/at-message-forward/internal/usbserial"
 	modemat "github.com/warthog618/modem/at"
-	serial "go.bug.st/serial"
 )
 
 const (
@@ -34,6 +37,7 @@ var (
 	errSerialSessionClosed = errors.New("serial session closed")
 	autoDetectSerialPort   = serialport.AutoDetectWithBaud
 	openSerialPort         = serialport.Open
+	openUSBTransport       = usbserial.Open
 )
 
 type telegramClient interface {
@@ -206,7 +210,7 @@ func Run(ctx context.Context, cfg config.Config) error {
 
 func runReconnectLoop(ctx context.Context, cfg config.Config, executor *reconnectableExecutor, sender *telegramSender) error {
 	return runReconnectLoopWithOptions(ctx, cfg, executor, sender, reconnectLoopOptions{
-		runSession:     runSerialSession,
+		runSession:     runModemSession,
 		wait:           waitBackoff,
 		initialBackoff: reconnectInitialBackoff,
 		maxBackoff:     reconnectMaxBackoff,
@@ -225,7 +229,7 @@ func runReconnectLoopWithOptions(ctx context.Context, cfg config.Config, executo
 	}
 	runSession := opts.runSession
 	if runSession == nil {
-		runSession = runSerialSession
+		runSession = runModemSession
 	}
 	wait := opts.wait
 	if wait == nil {
@@ -262,6 +266,14 @@ func runReconnectLoopWithOptions(ctx context.Context, cfg config.Config, executo
 	}
 }
 
+// runModemSession dispatches to the transport selected by cfg.Transport.
+func runModemSession(ctx context.Context, cfg config.Config, executor *reconnectableExecutor, sender *telegramSender) error {
+	if strings.EqualFold(cfg.Transport, config.TransportUSB) {
+		return runUSBSession(ctx, cfg, executor, sender)
+	}
+	return runSerialSession(ctx, cfg, executor, sender)
+}
+
 func runSerialSession(ctx context.Context, cfg config.Config, executor *reconnectableExecutor, sender *telegramSender) error {
 	portName := cfg.Port
 	if portName == "" {
@@ -277,10 +289,45 @@ func runSerialSession(ctx context.Context, cfg config.Config, executor *reconnec
 	if err != nil {
 		return fmt.Errorf("open serial failed: %w", err)
 	}
-	return runOpenedSerialSession(ctx, cfg, portName, port, executor, sender)
+	return runOpenedModemSession(ctx, cfg, portName, port, executor, sender)
 }
 
-func runOpenedSerialSession(ctx context.Context, cfg config.Config, portName string, port serial.Port, executor *reconnectableExecutor, sender *telegramSender) error {
+func runUSBSession(ctx context.Context, cfg config.Config, executor *reconnectableExecutor, sender *telegramSender) error {
+	vid, err := parseHexID(cfg.USBVendor)
+	if err != nil {
+		return fmt.Errorf("usb_vendor: %w", err)
+	}
+	pid, err := parseHexID(cfg.USBProduct)
+	if err != nil {
+		return fmt.Errorf("usb_product: %w", err)
+	}
+
+	link, name, err := openUSBTransport(usbserial.Options{
+		Vendor:    vid,
+		Product:   pid,
+		Interface: cfg.USBInterface,
+	})
+	if err != nil {
+		return fmt.Errorf("open usb modem failed: %w", err)
+	}
+	slog.Info("using usb modem", "link", name)
+	return runOpenedModemSession(ctx, cfg, name, link, executor, sender)
+}
+
+func parseHexID(value string) (uint16, error) {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return 0, nil
+	}
+	value = strings.TrimPrefix(strings.ToLower(value), "0x")
+	n, err := strconv.ParseUint(value, 16, 16)
+	if err != nil {
+		return 0, fmt.Errorf("invalid hex id %q: %w", value, err)
+	}
+	return uint16(n), nil
+}
+
+func runOpenedModemSession(ctx context.Context, cfg config.Config, portName string, port io.ReadWriteCloser, executor *reconnectableExecutor, sender *telegramSender) error {
 	var atModem *modemat.AT
 	defer func() {
 		if atModem != nil {
@@ -296,7 +343,7 @@ func runOpenedSerialSession(ctx context.Context, cfg config.Config, portName str
 	atModem = modem.NewAT(port, rawLines, events)
 
 	if cfg.InitModem {
-		if err := modem.InitAir780E(atModem, time.Duration(cfg.SIMReadyTimeoutSeconds)*time.Second); err != nil {
+		if err := modem.Init(atModem, time.Duration(cfg.SIMReadyTimeoutSeconds)*time.Second); err != nil {
 			return fmt.Errorf("initialize modem failed: %w", err)
 		}
 	}

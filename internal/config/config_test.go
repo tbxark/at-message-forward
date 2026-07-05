@@ -66,6 +66,56 @@ func TestLoadJSONUsesExplicitSIMReadyTimeout(t *testing.T) {
 	}
 }
 
+func TestDefaultTransportIsSerial(t *testing.T) {
+	if Default().Transport != TransportSerial {
+		t.Fatalf("Default().Transport = %q, want %q", Default().Transport, TransportSerial)
+	}
+	if Default().USBInterface != -1 {
+		t.Fatalf("Default().USBInterface = %d, want -1", Default().USBInterface)
+	}
+}
+
+func TestLoadUSBTransport(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.json")
+	if err := os.WriteFile(path, []byte(`{
+		"transport": "usb",
+		"usb_vendor": "2c7c",
+		"usb_product": "0125",
+		"usb_interface": 2,
+		"telegram_chat": "12345"
+	}`), 0o600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load returned error: %v", err)
+	}
+	if cfg.Transport != TransportUSB {
+		t.Fatalf("Transport = %q, want %q", cfg.Transport, TransportUSB)
+	}
+	if cfg.USBVendor != "2c7c" || cfg.USBProduct != "0125" {
+		t.Fatalf("USBVendor/Product = %q/%q, want 2c7c/0125", cfg.USBVendor, cfg.USBProduct)
+	}
+	if cfg.USBInterface != 2 {
+		t.Fatalf("USBInterface = %d, want 2", cfg.USBInterface)
+	}
+}
+
+func TestLoadOmittedUSBInterfaceStaysAuto(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.json")
+	if err := os.WriteFile(path, []byte(`{"transport":"usb","telegram_chat":"1"}`), 0o600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load returned error: %v", err)
+	}
+	if cfg.USBInterface != -1 {
+		t.Fatalf("USBInterface = %d, want -1 (auto)", cfg.USBInterface)
+	}
+}
+
 func TestLoadInvalidJSONReturnsError(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config.json")
 	if err := os.WriteFile(path, []byte(`{`), 0o600); err != nil {

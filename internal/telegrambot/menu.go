@@ -8,7 +8,7 @@ import (
 
 func mainMenuMessage() *tgapp.Message {
 	return &tgapp.Message{
-		Text: "Air780E Console\nChoose an action.",
+		Text: "AT Modem Console\nChoose an action.",
 		Button: oneColumnKeyboard(
 			menuButton("Status", "status"),
 			menuButton("SMS History", "sms"),
@@ -81,7 +81,7 @@ func deviceMenuMessage() *tgapp.Message {
 
 func resetConfirmMessage() *tgapp.Message {
 	return &tgapp.Message{
-		Text: "Restart the Air780E module? The serial connection may drop during reboot.",
+		Text: "Restart the modem module? The serial connection may drop during reboot.",
 		Button: oneColumnKeyboard(
 			actionButton("Confirm Restart", "reset"),
 			menuButton("Cancel / Back", "device"),

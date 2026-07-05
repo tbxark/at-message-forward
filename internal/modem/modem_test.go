@@ -30,7 +30,7 @@ func (f *fakeCommander) Command(cmd string, _ ...modemat.CommandOption) ([]strin
 	return response.lines, response.err
 }
 
-func TestInitAir780ERetriesCPINUntilReady(t *testing.T) {
+func TestInitRetriesCPINUntilReady(t *testing.T) {
 	modem := &fakeCommander{responses: []fakeResponse{
 		{},
 		{},
@@ -41,8 +41,8 @@ func TestInitAir780ERetriesCPINUntilReady(t *testing.T) {
 		{},
 	}}
 
-	if err := initAir780E(modem, time.Second, 0); err != nil {
-		t.Fatalf("initAir780E returned error: %v", err)
+	if err := initModem(modem, time.Second, 0); err != nil {
+		t.Fatalf("initModem returned error: %v", err)
 	}
 
 	want := []string{"", "E0", "+CPIN?", "+CPIN?", "+CSQ", "+CMGF=1", "+CNMI=2,2,0,0,0"}

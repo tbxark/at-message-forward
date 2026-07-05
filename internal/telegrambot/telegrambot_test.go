@@ -8,7 +8,7 @@ import (
 
 	tgapp "github.com/go-sphere/telegram-bot/telegram"
 	"github.com/go-telegram/bot/models"
-	"github.com/tbxark/air780e-sms-forwarder/internal/sms"
+	"github.com/tbxark/at-message-forward/internal/sms"
 )
 
 func TestParseChatID(t *testing.T) {
@@ -163,7 +163,7 @@ func TestWatchdogAlertIncludesRestartButton(t *testing.T) {
 	if msg.ParseMode != models.ParseModeHTML {
 		t.Fatalf("ParseMode = %q, want HTML", msg.ParseMode)
 	}
-	for _, want := range []string{"<b>Air780E Watchdog Alert</b>", "serial closed &lt;bad&gt;"} {
+	for _, want := range []string{"<b>Modem Watchdog Alert</b>", "serial closed &lt;bad&gt;"} {
 		if !strings.Contains(msg.Text, want) {
 			t.Fatalf("watchdog alert missing %q: %s", want, msg.Text)
 		}

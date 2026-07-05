@@ -9,7 +9,7 @@ import (
 
 	tgapp "github.com/go-sphere/telegram-bot/telegram"
 	"github.com/go-telegram/bot/models"
-	"github.com/tbxark/air780e-sms-forwarder/internal/sms"
+	"github.com/tbxark/at-message-forward/internal/sms"
 )
 
 const smsBodyMax = 3000
@@ -42,7 +42,7 @@ func formatWatchdogAlert(reason string) *tgapp.Message {
 	at := html.EscapeString(time.Now().Format(time.RFC3339))
 	body := escapeAndTruncate(defaultText(reason, "serial watchdog reported an unknown error"), watchdogReasonMax)
 	return &tgapp.Message{
-		Text:      fmt.Sprintf("<b>Air780E Watchdog Alert</b>\n\n%s\n\n<b>Time</b>: <code>%s</code>", body, at),
+		Text:      fmt.Sprintf("<b>Modem Watchdog Alert</b>\n\n%s\n\n<b>Time</b>: <code>%s</code>", body, at),
 		ParseMode: models.ParseModeHTML,
 		Button:    watchdogAlertKeyboard(),
 	}

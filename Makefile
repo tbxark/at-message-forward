@@ -14,10 +14,16 @@ build:
 buildLinuxX86:
 	GOOS=linux GOARCH=amd64 $(GO_BUILD) -o $(BUILD_DIR)/ ./...
 
+# buildUSB builds with the libusb-backed USB transport (`transport: "usb"`).
+# Requires libusb (macOS: `brew install libusb`; Debian/Ubuntu: `apt install libusb-1.0-0-dev`).
+.PHONY: buildUSB
+buildUSB:
+	CGO_ENABLED=1 go build -tags usb $(LD_FLAGS) -o $(BUILD_DIR)/ ./cmd/atmsgfwd
+
 
 .PHONY: buildImage
 buildImage:
-	docker buildx build --platform=linux/amd64,linux/arm64 -t ghcr.io/tbxark/air780e-sms-forwarder:latest . --push --provenance=false
+	docker buildx build --platform=linux/amd64,linux/arm64 -t ghcr.io/tbxark/at-message-forward:latest . --push --provenance=false
 
 .PHONY: lint
 lint:

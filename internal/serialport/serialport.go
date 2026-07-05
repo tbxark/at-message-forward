@@ -299,11 +299,27 @@ func ScorePortName(path string) int {
 	return score
 }
 
+// modemNameMarkers are lowercase substrings commonly found in the USB
+// product/interface names of AT-capable cellular modems. Matching any one of
+// them boosts a port's score. Add new vendor/model markers here as needed.
+var modemNameMarkers = []string{
+	// EigenComm / Luat Air series (e.g. Air780E)
+	"eigencomm", "air780", "luat",
+	// SIMCom (SIM7600/SIM7000/SIM800, A7670, ...)
+	"simcom", "sim7600", "sim7000", "sim800", "a7670",
+	// Quectel (EC20/EC25/EG25, BG96, ...)
+	"quectel", "ec20", "ec25", "eg25", "bg96",
+	// Other common cellular modem vendors
+	"fibocom", "telit", "u-blox", "ublox", "meig", "ml307", "gosuncn",
+}
+
 func scoreMarkerEvidence(values ...string) int {
 	for _, value := range values {
 		lower := strings.ToLower(value)
-		if strings.Contains(lower, "eigencomm") || strings.Contains(lower, "air780e") || strings.Contains(lower, "air780") || strings.Contains(lower, "luat") {
-			return 100
+		for _, marker := range modemNameMarkers {
+			if strings.Contains(lower, marker) {
+				return 100
+			}
 		}
 	}
 	return 0

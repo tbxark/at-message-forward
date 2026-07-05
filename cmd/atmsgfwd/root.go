@@ -2,16 +2,20 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
+	"time"
 
 	"github.com/spf13/cobra"
-	"github.com/tbxark/air780e-sms-forwarder/internal/config"
-	"github.com/tbxark/air780e-sms-forwarder/internal/forwarder"
-	"github.com/tbxark/air780e-sms-forwarder/internal/serialport"
+	"github.com/tbxark/at-message-forward/internal/config"
+	"github.com/tbxark/at-message-forward/internal/forwarder"
+	"github.com/tbxark/at-message-forward/internal/serialport"
+	"github.com/tbxark/at-message-forward/internal/usbserial"
 )
 
 var BuildVersion = "dev"
@@ -30,8 +34,8 @@ func Execute() {
 
 func NewRootCommand() *cobra.Command {
 	root := &cobra.Command{
-		Use:   "smsfwd",
-		Short: "Read Air780E SMS messages and forward them",
+		Use:   "atmsgfwd",
+		Short: "Read SMS messages from an AT-capable modem and forward them",
 	}
 
 	root.AddCommand(newForwardCommand())
@@ -44,7 +48,7 @@ func newForwardCommand() *cobra.Command {
 	return &cobra.Command{
 		Use:   "forward [config]",
 		Short: "Listen for SMS messages and forward them",
-		Long:  "Listen to the Air780E serial port, parse SMS modem indications, and forward messages through configured notification channels. If config is omitted, config.json is used.",
+		Long:  "Listen to an AT-capable modem's serial port, parse SMS modem indications, and forward messages through configured notification channels. If config is omitted, config.json is used.",
 		Args:  cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			configPath := config.DefaultPath
@@ -83,6 +87,7 @@ func newPortsCommand() *cobra.Command {
 			} else {
 				serialport.PrintCandidates()
 			}
+			printUSBCandidates(cmd, probeTimeout)
 			return nil
 		},
 	}
@@ -90,6 +95,33 @@ func newPortsCommand() *cobra.Command {
 	cmd.Flags().BoolVar(&probe, "probe", probe, "probe each candidate with a bare AT command")
 	cmd.Flags().DurationVar(&probeTimeout, "probe-timeout", probeTimeout, "timeout per AT probe")
 	return cmd
+}
+
+func printUSBCandidates(cmd *cobra.Command, probeTimeout time.Duration) {
+	out := cmd.OutOrStdout()
+	candidates, err := usbserial.List(probeTimeout)
+	if err != nil {
+		if errors.Is(err, usbserial.ErrNotSupported) {
+			fmt.Fprintln(out, "usb transport: not built in (rebuild with `-tags usb` and CGO_ENABLED=1 to talk to modems that expose no serial port, e.g. on macOS)")
+			return
+		}
+		fmt.Fprintf(out, "usb transport: enumeration failed: %v\n", err)
+		return
+	}
+	if len(candidates) == 0 {
+		fmt.Fprintln(out, "usb transport: no candidate modems found")
+		return
+	}
+	for _, c := range candidates {
+		status := "no AT interface"
+		if c.ProbeOK {
+			status = fmt.Sprintf("AT ok on if%d", c.Interface)
+		} else if c.ProbeError != "" {
+			status = c.ProbeError
+		}
+		fmt.Fprintf(out, "usb candidate %04x:%04x %q %q -> %s\n",
+			c.VID, c.PID, strings.TrimSpace(c.Manufacturer), strings.TrimSpace(c.ProductName), status)
+	}
 }
 
 func newVersionCommand() *cobra.Command {

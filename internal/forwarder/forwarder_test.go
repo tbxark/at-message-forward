@@ -3,12 +3,73 @@ package forwarder
 import (
 	"context"
 	"errors"
+	"io"
 	"testing"
 	"time"
 
-	"github.com/tbxark/air780e-sms-forwarder/internal/config"
+	"github.com/tbxark/at-message-forward/internal/config"
+	"github.com/tbxark/at-message-forward/internal/usbserial"
 	serial "go.bug.st/serial"
 )
+
+func TestParseHexID(t *testing.T) {
+	cases := []struct {
+		in      string
+		want    uint16
+		wantErr bool
+	}{
+		{"", 0, false},
+		{"2c7c", 0x2c7c, false},
+		{"0x0125", 0x0125, false},
+		{"FFFF", 0xffff, false},
+		{"  2c7c  ", 0x2c7c, false},
+		{"nothex", 0, true},
+		{"10000", 0, true},
+	}
+	for _, c := range cases {
+		got, err := parseHexID(c.in)
+		if c.wantErr {
+			if err == nil {
+				t.Fatalf("parseHexID(%q) err = nil, want error", c.in)
+			}
+			continue
+		}
+		if err != nil {
+			t.Fatalf("parseHexID(%q) err = %v", c.in, err)
+		}
+		if got != c.want {
+			t.Fatalf("parseHexID(%q) = %#x, want %#x", c.in, got, c.want)
+		}
+	}
+}
+
+func TestRunModemSessionRoutesToUSB(t *testing.T) {
+	original := openUSBTransport
+	defer func() { openUSBTransport = original }()
+
+	called := false
+	wantErr := errors.New("usb boom")
+	openUSBTransport = func(opts usbserial.Options) (io.ReadWriteCloser, string, error) {
+		called = true
+		if opts.Interface != 5 {
+			t.Fatalf("Interface = %d, want 5", opts.Interface)
+		}
+		if opts.Vendor != 0x2c7c {
+			t.Fatalf("Vendor = %#x, want 0x2c7c", opts.Vendor)
+		}
+		return nil, "", wantErr
+	}
+
+	err := runModemSession(context.Background(),
+		config.Config{Transport: "usb", USBVendor: "2c7c", USBInterface: 5},
+		&reconnectableExecutor{}, nil)
+	if !called {
+		t.Fatal("usb transport was not used for transport=usb")
+	}
+	if !errors.Is(err, wantErr) {
+		t.Fatalf("err = %v, want %v", err, wantErr)
+	}
+}
 
 func TestReconnectLoopRetriesAfterClosedSession(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
