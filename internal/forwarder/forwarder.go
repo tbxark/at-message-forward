@@ -11,8 +11,9 @@ import (
 
 	"github.com/tbxark/at-message-forward/internal/config"
 	"github.com/tbxark/at-message-forward/internal/modem"
+	"github.com/tbxark/at-message-forward/internal/notifier"
+	"github.com/tbxark/at-message-forward/internal/notifier/telegram"
 	"github.com/tbxark/at-message-forward/internal/sms"
-	"github.com/tbxark/at-message-forward/internal/telegrambot"
 	"github.com/tbxark/at-message-forward/internal/transport"
 	modemat "github.com/warthog618/modem/at"
 )
@@ -25,8 +26,8 @@ const (
 	serialWatchdogAlertLimit = 10 * time.Second
 	reconnectInitialBackoff  = 2 * time.Second
 	reconnectMaxBackoff      = 30 * time.Second
-	telegramImportantBuffer  = 64
-	telegramRawBuffer        = 16
+	notifyImportantBuffer    = 64
+	notifyRawBuffer          = 16
 )
 
 var (
@@ -34,12 +35,6 @@ var (
 	errSerialSessionClosed = errors.New("serial session closed")
 	newTransport           = transport.New
 )
-
-type telegramClient interface {
-	SendSMS(context.Context, sms.Event) error
-	SendRaw(context.Context, string) error
-	SendWatchdogAlert(context.Context, string) error
-}
 
 type reconnectableExecutor struct {
 	commandMu sync.Mutex
@@ -76,36 +71,38 @@ func (e *reconnectableExecutor) ExecuteAT(ctx context.Context, cmd string) ([]st
 	return modem.RunATCommand(atModem, cmd)
 }
 
-type telegramSendKind int
+type sendKind int
 
 const (
-	telegramSendSMS telegramSendKind = iota
-	telegramSendRaw
-	telegramSendWatchdog
+	sendSMS sendKind = iota
+	sendRaw
+	sendWatchdog
 )
 
-type telegramSendItem struct {
-	kind   telegramSendKind
-	event  sms.Event
-	line   string
-	reason string
+type sendItem struct {
+	kind sendKind
+	msg  notifier.Message
 }
 
-type telegramSender struct {
-	client    telegramClient
-	important chan telegramSendItem
-	raw       chan telegramSendItem
+// sender queues outbound messages and delivers them through a notifier.Notifier
+// on a single worker, so notifier HTTP latency never blocks modem event
+// handling. Raw lines use a separate, droppable queue; SMS and watchdog alerts
+// share a priority queue that blocks only until buffered.
+type sender struct {
+	notifier  notifier.Notifier
+	important chan sendItem
+	raw       chan sendItem
 }
 
-func newTelegramSender(client telegramClient) *telegramSender {
-	return &telegramSender{
-		client:    client,
-		important: make(chan telegramSendItem, telegramImportantBuffer),
-		raw:       make(chan telegramSendItem, telegramRawBuffer),
+func newSender(n notifier.Notifier) *sender {
+	return &sender{
+		notifier:  n,
+		important: make(chan sendItem, notifyImportantBuffer),
+		raw:       make(chan sendItem, notifyRawBuffer),
 	}
 }
 
-func (s *telegramSender) Run(ctx context.Context) {
+func (s *sender) Run(ctx context.Context) {
 	for {
 		select {
 		case <-ctx.Done():
@@ -118,43 +115,38 @@ func (s *telegramSender) Run(ctx context.Context) {
 	}
 }
 
-func (s *telegramSender) EnqueueSMS(ctx context.Context, event sms.Event) {
-	s.enqueueImportant(ctx, telegramSendItem{kind: telegramSendSMS, event: event})
+func (s *sender) EnqueueSMS(ctx context.Context, event sms.Event) {
+	s.enqueueImportant(ctx, sendItem{kind: sendSMS, msg: notifier.SMSMessage(event)})
 }
 
-func (s *telegramSender) EnqueueWatchdog(ctx context.Context, reason string) {
-	s.enqueueImportant(ctx, telegramSendItem{kind: telegramSendWatchdog, reason: reason})
+func (s *sender) EnqueueWatchdog(ctx context.Context, reason string) {
+	s.enqueueImportant(ctx, sendItem{kind: sendWatchdog, msg: notifier.WatchdogMessage(reason)})
 }
 
-func (s *telegramSender) EnqueueRaw(line string) {
+func (s *sender) EnqueueRaw(line string) {
 	select {
-	case s.raw <- telegramSendItem{kind: telegramSendRaw, line: line}:
+	case s.raw <- sendItem{kind: sendRaw, msg: notifier.RawMessage(line)}:
 	default:
-		slog.Warn("telegram raw queue full; dropping raw line", "line", line)
+		slog.Warn("notify raw queue full; dropping raw line", "line", line)
 	}
 }
 
-func (s *telegramSender) enqueueImportant(ctx context.Context, item telegramSendItem) {
+func (s *sender) enqueueImportant(ctx context.Context, item sendItem) {
 	select {
 	case <-ctx.Done():
 	case s.important <- item:
 	}
 }
 
-func (s *telegramSender) send(ctx context.Context, item telegramSendItem) {
-	var err error
-	switch item.kind {
-	case telegramSendSMS:
-		err = s.client.SendSMS(ctx, item.event)
-	case telegramSendRaw:
-		err = s.client.SendRaw(ctx, item.line)
-	case telegramSendWatchdog:
-		alertCtx, cancel := context.WithTimeout(ctx, serialWatchdogAlertLimit)
-		err = s.client.SendWatchdogAlert(alertCtx, item.reason)
-		cancel()
+func (s *sender) send(ctx context.Context, item sendItem) {
+	sendCtx := ctx
+	if item.kind == sendWatchdog {
+		var cancel context.CancelFunc
+		sendCtx, cancel = context.WithTimeout(ctx, serialWatchdogAlertLimit)
+		defer cancel()
 	}
-	if err != nil && ctx.Err() == nil {
-		slog.Error("telegram send failed", "kind", item.kind, "err", err)
+	if err := s.notifier.Notify(sendCtx, item.msg); err != nil && ctx.Err() == nil {
+		slog.Error("notify send failed", "kind", item.kind, "err", err)
 	}
 }
 
@@ -169,31 +161,31 @@ func Run(ctx context.Context, cfg config.Config) error {
 	if cfg.TelegramToken == "" {
 		return fmt.Errorf("telegram_token is required")
 	}
-	if _, err := telegrambot.ParseChatID(cfg.TelegramChat); err != nil {
+	if _, err := telegram.ParseChatID(cfg.TelegramChat); err != nil {
 		return err
 	}
 
 	executor := &reconnectableExecutor{}
-	telegram, err := telegrambot.New(cfg, executor)
+	bot, err := telegram.New(cfg, executor)
 	if err != nil {
 		return err
 	}
-	if err := telegram.Initialize(ctx); err != nil {
-		_ = telegram.Close(context.Background())
+	if err := bot.Initialize(ctx); err != nil {
+		_ = bot.Close(context.Background())
 		return fmt.Errorf("initialize telegram bot failed: %w", err)
 	}
 	pollCtx, cancelPoll := context.WithCancel(ctx)
 	defer func() {
 		cancelPoll()
-		_ = telegram.Close(context.Background())
+		_ = bot.Close(context.Background())
 	}()
 	go func() {
-		if err := telegram.Start(pollCtx); err != nil && pollCtx.Err() == nil {
+		if err := bot.Start(pollCtx); err != nil && pollCtx.Err() == nil {
 			slog.Error("telegram polling failed", "err", err)
 		}
 	}()
 	slog.Info("telegram forwarding and polling control enabled")
-	sender := newTelegramSender(telegram)
+	sender := newSender(bot)
 	go sender.Run(ctx)
 
 	watchdogCtx, cancelWatchdog := context.WithCancel(ctx)
@@ -207,7 +199,7 @@ func Run(ctx context.Context, cfg config.Config) error {
 	return runReconnectLoop(ctx, cfg, tr, executor, sender)
 }
 
-func runReconnectLoop(ctx context.Context, cfg config.Config, tr transport.Transport, executor *reconnectableExecutor, sender *telegramSender) error {
+func runReconnectLoop(ctx context.Context, cfg config.Config, tr transport.Transport, executor *reconnectableExecutor, sender *sender) error {
 	return runReconnectLoopWithOptions(ctx, reconnectLoopOptions{
 		runSession: func(ctx context.Context) error {
 			return runModemSession(ctx, cfg, tr, executor, sender)
@@ -266,7 +258,7 @@ func runReconnectLoopWithOptions(ctx context.Context, opts reconnectLoopOptions)
 
 // runModemSession opens the transport (re-running discovery each call) and runs
 // one modem session over the returned link.
-func runModemSession(ctx context.Context, cfg config.Config, tr transport.Transport, executor *reconnectableExecutor, sender *telegramSender) error {
+func runModemSession(ctx context.Context, cfg config.Config, tr transport.Transport, executor *reconnectableExecutor, sender *sender) error {
 	link, name, err := tr.Open(ctx)
 	if err != nil {
 		return fmt.Errorf("open modem failed: %w", err)
@@ -274,7 +266,7 @@ func runModemSession(ctx context.Context, cfg config.Config, tr transport.Transp
 	return runOpenedModemSession(ctx, cfg, name, link, executor, sender)
 }
 
-func runOpenedModemSession(ctx context.Context, cfg config.Config, portName string, port io.ReadWriteCloser, executor *reconnectableExecutor, sender *telegramSender) error {
+func runOpenedModemSession(ctx context.Context, cfg config.Config, portName string, port io.ReadWriteCloser, executor *reconnectableExecutor, sender *sender) error {
 	var atModem *modemat.AT
 	defer func() {
 		if atModem != nil {
@@ -336,7 +328,7 @@ func nextBackoff(current, max time.Duration) time.Duration {
 	return next
 }
 
-func runSerialWatchdog(ctx context.Context, executor telegrambot.Executor, sender *telegramSender) {
+func runSerialWatchdog(ctx context.Context, executor telegram.Executor, sender *sender) {
 	ticker := time.NewTicker(serialWatchdogInterval)
 	defer ticker.Stop()
 
@@ -370,7 +362,7 @@ func runSerialWatchdog(ctx context.Context, executor telegrambot.Executor, sende
 	}
 }
 
-func probeSerial(ctx context.Context, executor telegrambot.Executor) error {
+func probeSerial(ctx context.Context, executor telegram.Executor) error {
 	_, err := executor.ExecuteAT(ctx, serialWatchdogCommand)
 	return err
 }

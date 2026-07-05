@@ -1,4 +1,4 @@
-package telegrambot
+package telegram
 
 import (
 	"context"
@@ -12,7 +12,7 @@ import (
 	telebot "github.com/go-telegram/bot"
 	"github.com/go-telegram/bot/models"
 	"github.com/tbxark/at-message-forward/internal/config"
-	"github.com/tbxark/at-message-forward/internal/sms"
+	"github.com/tbxark/at-message-forward/internal/notifier"
 )
 
 const (
@@ -84,16 +84,21 @@ func (s *Service) Close(ctx context.Context) error {
 	return s.app.Close(ctx)
 }
 
-func (s *Service) SendSMS(ctx context.Context, event sms.Event) error {
-	return s.sendMessage(ctx, s.chatID, formatSMSMessage(event))
-}
+var _ notifier.Notifier = (*Service)(nil)
 
-func (s *Service) SendRaw(ctx context.Context, line string) error {
-	return s.pushText(ctx, "Modem raw: "+line)
-}
-
-func (s *Service) SendWatchdogAlert(ctx context.Context, reason string) error {
-	return s.sendMessage(ctx, s.chatID, formatWatchdogAlert(reason))
+// Notify implements notifier.Notifier: it formats msg per its Kind and pushes
+// it to the configured chat.
+func (s *Service) Notify(ctx context.Context, msg notifier.Message) error {
+	switch msg.Kind {
+	case notifier.KindSMS:
+		return s.sendMessage(ctx, s.chatID, formatSMSMessage(msg.SMS))
+	case notifier.KindRaw:
+		return s.pushText(ctx, "Modem raw: "+msg.Text)
+	case notifier.KindWatchdog:
+		return s.sendMessage(ctx, s.chatID, formatWatchdogAlert(msg.Text))
+	default:
+		return fmt.Errorf("telegram: unknown notify kind %d", msg.Kind)
+	}
 }
 
 func (s *Service) SendDefaultMenu(ctx context.Context) error {

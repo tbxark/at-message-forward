@@ -32,32 +32,33 @@ There is no lint config in the repo; use `go vet ./...` and `gofmt`.
 Data flows in one direction through a fan-out of channels:
 
 ```
-telegrambot.Service + polling ──┐
-                                 ↓
+notifier/telegram.Service + polling ──┐
+                                       ↓
 transport.Open → modem.AT (warthog618/modem/at) → +CMT indication handler
                                                          ↓
                               rawLines chan ──┐    events chan (sms.Event)
                                               ↓          ↓
-                         forwarder session loop enqueues Telegram sends
+                         forwarder session loop enqueues notifier.Message
                                               ↓
-                              telegramSender worker serializes API calls
+                    sender worker serializes notifier.Notify calls
 ```
 
 - **cmd/** — Cobra root with two subcommands (`forward`, `ports`). `forward` reads runtime configuration from `config.json` by default and accepts an optional config path.
 - **internal/config/** — `Config` struct + `Default()` + JSON loading from `config.json`. Missing files use defaults; empty string and zero number values fall back to defaults.
-- **internal/forwarder/** — `Run()` validates config, starts Telegram once, starts a watchdog, builds a `transport.Transport` from config, then runs a reconnect loop. Each iteration calls `runModemSession`, which does `transport.Open(ctx)` (returning an `io.ReadWriteCloser` link + name) and feeds `runOpenedModemSession(io.ReadWriteCloser)` — creates `modem.AT`, registers indication channels, initializes the modem when enabled, swaps the active AT executor, and selects over `rawLines`, `events`, `ctx.Done()`, and modem-closed. Telegram sends are queued so HTTP latency does not block modem event handling.
+- **internal/forwarder/** — `Run()` validates config, starts the Telegram bot once, starts a watchdog, builds a `transport.Transport` from config, then runs a reconnect loop. Each iteration calls `runModemSession`, which does `transport.Open(ctx)` (returning an `io.ReadWriteCloser` link + name) and feeds `runOpenedModemSession(io.ReadWriteCloser)` — creates `modem.AT`, registers indication channels, initializes the modem when enabled, swaps the active AT executor, and selects over `rawLines`, `events`, `ctx.Done()`, and modem-closed. The `sender` queues `notifier.Message`s (SMS/watchdog on a priority queue, raw lines on a separate droppable queue) and delivers them via `notifier.Notify` on one worker, so notifier HTTP latency does not block modem event handling.
 - **internal/transport/** — Parent package abstracting how the modem's AT byte stream is reached. Defines the `Transport` interface (`Open(ctx) (io.ReadWriteCloser, name, error)`) and `New(cfg)`, which maps `cfg.Transport` onto a concrete transport (parsing hex USB VID/PID). Adding a transport (TCP, a test fake) means implementing `Transport` and wiring it into `New`. Two subpackages:
   - **internal/transport/usb/** — libusb (gousb) transport implementing `io.ReadWriteCloser` over a modem's vendor-specific AT interface bulk endpoints. `Transport.Open` finds the device (optional VID/PID), claims config 1 **without** auto-detaching kernel drivers (so it coexists with the CDC-ECM network interface on macOS), and auto-probes 0xFF interfaces for one that answers `AT`. The real open path (`openLink`) is `//go:build usb` (+CGO/libusb); a `!usb` stub returns `ErrNotSupported`.
 - **internal/modem/** — Wraps `warthog618/modem/at`. `NewAT` registers `+CMT:`/`+CMTI:`/`+CDS:` unsolicited-result-code handlers; `+CMT:` parses into an `sms.Event`. `Init` sends the generic 3GPP AT init sequence (`E0`, `+CPIN?`, `+CSQ`, `+CMGF=1`, `+CNMI=2,2,0,0,0`).
 - **internal/sms/** — Self-contained SMS parser. `ParseCMTIndication` distinguishes text-mode (`+CMT: "<oa>",...`) from PDU-mode (`+CMT: [<alpha>],<length>`) headers. `DecodePDU` validates TPDU length, parses SMS-DELIVER and TP-VPF-aware SMS-SUBMIT layouts, and decodes GSM 7-bit / UCS2 / 8-bit user data. This decoder is intentionally local (not a library) because it follows the standard 3GPP `+CMT` PDU format.
-- **internal/telegrambot/** — Telegram service, long polling, inline keyboard menus, command formatting, and serialized AT command execution through the `Executor` interface. The forwarder supplies a reconnectable executor that returns a clear not-connected error when no serial session is active.
+- **internal/notifier/** — Parent package abstracting where forwarded messages are pushed out (dual of `transport`, which abstracts where they come from). Defines the `Notifier` interface (`Notify(ctx, Message)`) and the `Message`/`Kind` model (SMS/raw/watchdog) plus constructors. Only the push-out direction is abstracted; channel-specific extras stay in the implementation. Adding a channel (email, webhook, Bark, …) means implementing `Notify` and nothing else.
+  - **internal/notifier/telegram/** — Telegram implementation of `Notifier` (`Notify` formats by `Kind`), plus Telegram-only extras kept **out** of the interface: long polling, inline keyboard menus, command formatting, and serialized AT command execution through the `Executor` interface. The forwarder supplies a reconnectable executor that returns a clear not-connected error when no serial session is active.
 - **internal/transport/serial/** — Serial transport plus port discovery and scoring. `Transport.Open` resolves the port (auto-detecting each call when unset, so a re-enumerated USB device is found on reconnect) and opens it. `Candidates()` ranks ports; known cellular-modem vendor names (`modemNameMarkers`: SIMCom/Quectel/EigenComm-Air780E/Fibocom/u-blox/…), USB interface metadata (Linux `/sys/class/tty`), and stable `/dev/serial/by-id/*` symlinks score higher. `if03`/lower data interfaces beat `log`/`ppp`.
 
 ## Key behaviors to preserve
 
 - **PDU length validation**: `DecodePDU` rejects a PDU when the actual TPDU length (after skipping the SMSC address) doesn't match the `<length>` from the `+CMT:` header. This guards against shifted/partial serial reads producing a wrong SMS. Don't remove this check.
 - **Non-blocking channel sends**: `emitRawLines`/`emitSMSEvent` use `select`/`default` and drop (with a stderr warning) rather than block when the channel buffer is full.
-- **Queued Telegram sends**: forwarder queues SMS/watchdog alerts and best-effort raw-line sends before Telegram HTTP calls. Keep modem indication handling decoupled from Telegram latency.
+- **Queued notifier sends**: the `sender` queues SMS/watchdog alerts and best-effort raw-line sends before `notifier.Notify` calls. Keep modem indication handling decoupled from notifier (e.g. Telegram HTTP) latency.
 - **Reconnect behavior**: serial disconnect/open/init errors are retryable until context cancellation. For empty `port`, autodetect is re-run on each retry so a re-enumerated USB device can be found.
 - Many modems default to PDU SMS mode (`AT+CMGF=0`); init switches to text mode (`CMGF=1`) but a modem can still push PDU-mode `+CMT`, so both paths must keep working.
 

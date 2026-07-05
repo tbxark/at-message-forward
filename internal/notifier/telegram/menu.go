@@ -1,4 +1,4 @@
-package telegrambot
+package telegram
 
 import (
 	tgapp "github.com/go-sphere/telegram-bot/telegram"
