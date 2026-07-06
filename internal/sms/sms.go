@@ -54,10 +54,25 @@ func ParseCMTIndication(lines []string) (Event, error) {
 	}
 
 	if m := cmtHeaderRE.FindStringSubmatch(header); len(m) == 2 {
-		return Event{From: m[1], Text: body, At: time.Now()}, nil
+		return Event{From: m[1], Text: decodeTextModeBody(body), At: time.Now()}, nil
 	}
 
 	return event, fmt.Errorf("unsupported +CMT header: %s", header)
+}
+
+// decodeTextModeBody handles text-mode (+CMGF=1) message bodies. When the SMS
+// contains characters outside the modem's TE alphabet (e.g. Chinese), many
+// modems still deliver the user data as raw UCS2 hex even in text mode. Detect
+// that shape (pure hex, whole number of UCS2 code units) and decode it to UTF-8;
+// otherwise return the body unchanged. GSM-representable text arrives as
+// readable plaintext in text mode, so only UCS2 hex needs decoding here.
+func decodeTextModeBody(body string) string {
+	if len(body) >= 4 && len(body)%4 == 0 && hexLineRE.MatchString(body) {
+		if text, err := decodeUCS2(body, false); err == nil {
+			return text
+		}
+	}
+	return body
 }
 
 func DecodePDU(pdu string, expectedTPDULength int) (Event, error) {

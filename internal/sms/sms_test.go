@@ -82,6 +82,24 @@ func TestParseCMTIndicationText(t *testing.T) {
 	}
 }
 
+func TestParseCMTIndicationTextUCS2Hex(t *testing.T) {
+	// Text mode (+CMGF=1) with a GSM charset: the phone number in the header is
+	// plain ASCII, but non-GSM content (Chinese) is delivered as raw UCS2 hex.
+	event, err := ParseCMTIndication([]string{
+		`+CMT: "10686230813854910496",,"26/07/06,13:56:07+32"`,
+		"3010003500320054004F00590053301160A876849A8C8BC17801662F003700390031003930025982975E672C4EBA64CD4F5CFF0C8BF75FFD7565672C77ED4FE1",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if event.From != "10686230813854910496" {
+		t.Fatalf("from = %q", event.From)
+	}
+	if want := "【52TOYS】您的验证码是7919。如非本人操作，请忽略本短信"; event.Text != want {
+		t.Fatalf("text = %q, want %q", event.Text, want)
+	}
+}
+
 func TestParseCMTIndicationPDU(t *testing.T) {
 	event, err := ParseCMTIndication([]string{
 		`+CMT:,23`,

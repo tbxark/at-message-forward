@@ -20,6 +20,21 @@ buildLinuxX86:
 buildUSB:
 	CGO_ENABLED=1 go build -tags usb $(LD_FLAGS) -o $(BUILD_DIR)/ ./cmd/atmsgfwd
 
+# ARGS lets you pass subcommand/flags, e.g. `make run ARGS="ports"` or
+# `make run ARGS="forward custom-config.json"`.
+ARGS ?= forward
+
+# run starts the app with the pure-Go serial transport only (no libusb needed).
+.PHONY: run
+run:
+	CGO_ENABLED=0 go run $(LD_FLAGS) ./cmd/atmsgfwd $(ARGS)
+
+# runUSB starts the app with the libusb-backed USB transport enabled
+# (`transport: "usb"`). Requires libusb; see buildUSB above.
+.PHONY: runUSB
+runUSB:
+	CGO_ENABLED=1 go run -tags usb $(LD_FLAGS) ./cmd/atmsgfwd $(ARGS)
+
 
 .PHONY: buildImage
 buildImage:
